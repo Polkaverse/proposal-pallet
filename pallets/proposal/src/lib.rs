@@ -1,6 +1,5 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 pub use pallet::*;
-use scale_info::{prelude::vec, TypeInfo};
 
 // #[cfg(test)]
 // mod mock;
@@ -13,14 +12,22 @@ use scale_info::{prelude::vec, TypeInfo};
 
 use frame_support::{
 	codec::{Decode, Encode},
-	inherent::Vec,
 	sp_runtime::RuntimeDebug,
+	inherent::Vec,
 };
+use frame_support::traits::tokens::Balance;
+use scale_info::{prelude::vec,TypeInfo};
+use scale_info::prelude::string::String;
 
 #[derive(PartialEq, Eq, Encode, Decode, RuntimeDebug, TypeInfo)]
 pub struct Votes<AccountId> {
 	ayes: Vec<AccountId>,
 	nays: Vec<AccountId>,
+}
+
+#[derive(PartialEq, Eq, Encode, Decode, RuntimeDebug, TypeInfo)]
+pub struct ProposalInfo<Balance> {
+	amount: Balance,
 }
 
 #[derive(PartialEq, Eq, Clone, Encode, Decode, RuntimeDebug, TypeInfo)]
@@ -31,21 +38,30 @@ pub enum Vote {
 
 #[frame_support::pallet]
 pub mod pallet {
-	use crate::Votes;
-	use frame_support::{inherent::Vec, pallet_prelude::*};
+	use frame_support::pallet_prelude::*;
 	use frame_system::pallet_prelude::*;
 	use scale_info::{prelude::vec, TypeInfo};
+	use frame_support::inherent::Vec;
+	use crate::{ProposalInfo, Votes};
+	use frame_support::traits::{Currency,ReservableCurrency};
+	use frame_support::traits::tokens::Balance;
 
 	#[pallet::pallet]
 	#[pallet::generate_store(pub(super) trait Store)]
 	#[pallet::without_storage_info]
 	pub struct Pallet<T>(_);
 
+	pub type BalanceIn<Runtime> = <<Runtime as Config>::Currency as Currency<
+		<Runtime as frame_system::Config>::AccountId,
+	>>::Balance;
+
 	/// Configure the pallet by specifying the parameters and types on which it depends.
 	#[pallet::config]
 	pub trait Config: frame_system::Config {
 		/// Because this pallet emits events, it depends on the runtime's definition of an event.
 		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
+		type Currency: ReservableCurrency<Self::AccountId>;
+
 	}
 
 	#[pallet::storage]
@@ -58,7 +74,12 @@ pub mod pallet {
 
 	#[pallet::storage]
 	#[pallet::getter(fn voting)]
-	pub type Voting<T: Config> = StorageMap<_, Identity, T::Hash, Votes<T::AccountId>, OptionQuery>;
+	pub type Voting<T: Config> =
+	StorageMap<_, Identity, T::Hash,Votes<T::AccountId>, OptionQuery>;
+
+	#[pallet::storage]
+	#[pallet::getter(fn proposal)]
+	pub type Proposal<T: Config> = StorageMap<_,Blake2_128Concat, T::Hash,ProposalInfo<BalanceIn<T>>,OptionQuery>;
 
 	// Pallets use events to inform users when important changes are made.
 	#[pallet::event]
@@ -127,11 +148,7 @@ pub mod pallet {
 		}
 
 		#[pallet::weight(10_000)]
-		pub fn add_proposal(
-			origin: OriginFor<T>,
-			who: T::AccountId,
-			proposal: T::Hash,
-		) -> DispatchResult {
+		pub fn add_proposal(origin:OriginFor<T>, who: T::AccountId, proposal_hash: T::Hash, amount: BalanceIn<T>) -> DispatchResult {
 			ensure_signed(origin.clone())?;
 
 			// member should be present in community members list
@@ -140,11 +157,21 @@ pub mod pallet {
 				.binary_search(&who)
 				.map_err(|_| Error::<T>::MemberIsNotPresentInCommunity)?;
 
-			ensure!(!Voting::<T>::contains_key(&proposal), Error::<T>::ProposalAlreadyExist);
+			ensure!(!Voting::<T>::contains_key(&proposal_hash), Error::<T>::ProposalAlreadyExist);
 
+			let info = {
+				ProposalInfo{
+					amount:amount
+				}
+			};
+			<Proposal<T>>::insert(proposal_hash,info);
 			// Add Proposal
-			let votes = { Votes { ayes: vec![], nays: vec![] } };
-			<Voting<T>>::insert(proposal, votes);
+			let votes = {
+				Votes{
+					ayes: vec![],nays: vec![],
+				}
+			};
+			<Voting<T>>::insert(proposal_hash, votes);
 			Self::deposit_event(Event::ProposalAdded);
 			Ok(())
 		}

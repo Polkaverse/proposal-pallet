@@ -284,6 +284,7 @@ impl pallet_template::Config for Runtime {
 /// Configure the pallet-proposal in pallets/proposal.
 impl pallet_proposal::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
+	type Currency = Balances;
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.
