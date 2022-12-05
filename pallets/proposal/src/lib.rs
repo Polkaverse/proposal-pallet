@@ -30,6 +30,7 @@ pub struct Votes<AccountId> {
 
 #[derive(PartialEq, Eq, Encode, Decode, RuntimeDebug, TypeInfo)]
 pub struct ProposalInfo<Balance> {
+	title: Vec<u8>,
 	amount: Balance,
 }
 
@@ -45,7 +46,7 @@ pub mod pallet {
 	use frame_support::{
 		inherent::Vec,
 		pallet_prelude::*,
-		traits::{Currency, ReservableCurrency},
+		traits::{Currency, ExistenceRequirement, ReservableCurrency},
 	};
 	use frame_system::pallet_prelude::*;
 	use scale_info::prelude::vec;
@@ -221,6 +222,7 @@ pub mod pallet {
 		#[pallet::weight(10_000_000)]
 		pub fn add_proposal(
 			origin: OriginFor<T>,
+			title: Vec<u8>,
 			proposal_hash: T::Hash,
 			amount: BalanceIn<T>,
 		) -> DispatchResult {
@@ -235,7 +237,7 @@ pub mod pallet {
 
 			ensure!(!Voting::<T>::contains_key(&proposal_hash), Error::<T>::ProposalAlreadyExist);
 
-			let info = { ProposalInfo { amount } };
+			let info = { ProposalInfo { amount, title } };
 			// Add Proposal
 			<Proposal<T>>::insert(proposal_hash, info);
 
@@ -316,12 +318,31 @@ pub mod pallet {
 
 		/// Set the Account from where the funds will be transferred.
 		/// Only sudo is allowed to make this happen.
-		#[pallet::weight(10_000000)]
+		#[pallet::weight(10_000_000)]
 		pub fn add_pot_account(origin: OriginFor<T>, who: T::AccountId) -> DispatchResult {
 			ensure_root(origin.clone())?;
 			let mut accounts = Vec::new();
 			accounts.push(who.clone());
 			PotAccount::<T>::put(accounts);
+			Ok(())
+		}
+
+		/// Any Community member can fund to the pot account.
+		#[pallet::weight(10_000_000)]
+		pub fn fund_pot_account(
+			origin: OriginFor<T>,
+			who: T::AccountId,
+			amount: BalanceIn<T>,
+		) -> DispatchResult {
+			ensure_signed(origin.clone())?;
+			// member should be present in community members list
+			let community_member = CommunityMembers::<T>::get();
+			let _is_present = community_member
+				.binary_search(&who)
+				.map_err(|_| Error::<T>::MemberIsNotPresentInCommunity)?;
+			let accounts = PotAccount::<T>::get();
+			let pot_account = accounts[0].clone();
+			T::Currency::transfer(&who, &pot_account, amount, ExistenceRequirement::KeepAlive)?;
 			Ok(())
 		}
 	}
