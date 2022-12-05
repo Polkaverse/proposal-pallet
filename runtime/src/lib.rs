@@ -59,6 +59,9 @@ use xcm_executor::XcmExecutor;
 /// Import the template pallet.
 pub use pallet_template;
 
+/// Import the proposal pallet.
+pub use pallet_proposal;
+
 /// Alias to 512-bit hash when used in the context of a transaction signature on the chain.
 pub type Signature = MultiSignature;
 
@@ -464,6 +467,20 @@ impl pallet_template::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
 }
 
+parameter_types! {
+	// Time duration for voting on proposal.
+	// For seven days it would be 100800 blocks.
+	// We are using 10 for testing.
+	pub const TimeDuration: u32 = 10;
+}
+
+/// Configure the pallet-proposal in pallets/proposal.
+impl pallet_proposal::Config for Runtime {
+	type RuntimeEvent = RuntimeEvent;
+	type Currency = Balances;
+	type TimeDuration = TimeDuration;
+}
+
 // Create the runtime by composing the FRAME pallets that were previously configured.
 construct_runtime!(
 	pub enum Runtime where
@@ -498,6 +515,7 @@ construct_runtime!(
 
 		// Template
 		TemplatePallet: pallet_template::{Pallet, Call, Storage, Event<T>}  = 40,
+		Proposal: pallet_proposal = 41,
 	}
 );
 

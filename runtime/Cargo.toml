@@ -23,6 +23,7 @@ smallvec = "1.10.0"
 
 # Local
 pallet-template = { path = "../pallets/template", default-features = false }
+pallet-proposal = { path = "../pallets/proposal", default-features = false }
 
 # Substrate
 frame-benchmarking = { git = "https://github.com/paritytech/substrate", default-features = false, optional = true, branch = "polkadot-v0.9.32" }
@@ -100,6 +101,7 @@ std = [
 	"pallet-session/std",
 	"pallet-sudo/std",
 	"pallet-template/std",
+	"pallet-proposal/std",
 	"pallet-timestamp/std",
 	"pallet-transaction-payment-rpc-runtime-api/std",
 	"pallet-transaction-payment/std",
