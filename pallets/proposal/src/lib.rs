@@ -12,14 +12,17 @@ pub use pallet::*;
 
 use frame_support::{
 	codec::{Decode, Encode},
-	sp_runtime::RuntimeDebug,
+	dispatch::DispatchResult,
 	inherent::Vec,
+	sp_runtime::RuntimeDebug,
+	traits::{Currency, ExistenceRequirement},
 };
-use frame_support::traits::tokens::Balance;
-use scale_info::{prelude::vec,TypeInfo};
-use scale_info::prelude::string::String;
+use scale_info::TypeInfo;
 
-#[derive(PartialEq, Eq, Encode, Decode, RuntimeDebug, TypeInfo)]
+pub type MemberCount = u32;
+pub type ProposalId<T> = <T as frame_system::Config>::Hash;
+
+#[derive(PartialEq, Eq, Clone, Encode, Decode, RuntimeDebug, TypeInfo)]
 pub struct Votes<AccountId> {
 	ayes: Vec<AccountId>,
 	nays: Vec<AccountId>,
@@ -38,13 +41,14 @@ pub enum Vote {
 
 #[frame_support::pallet]
 pub mod pallet {
-	use frame_support::pallet_prelude::*;
+	use crate::{MemberCount, ProposalId, ProposalInfo, Vote, Votes};
+	use frame_support::{
+		inherent::Vec,
+		pallet_prelude::*,
+		traits::{Currency, ReservableCurrency},
+	};
 	use frame_system::pallet_prelude::*;
-	use scale_info::{prelude::vec, TypeInfo};
-	use frame_support::inherent::Vec;
-	use crate::{ProposalInfo, Votes};
-	use frame_support::traits::{Currency,ReservableCurrency};
-	use frame_support::traits::tokens::Balance;
+	use scale_info::prelude::vec;
 
 	#[pallet::pallet]
 	#[pallet::generate_store(pub(super) trait Store)]
@@ -61,8 +65,17 @@ pub mod pallet {
 		/// Because this pallet emits events, it depends on the runtime's definition of an event.
 		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
 		type Currency: ReservableCurrency<Self::AccountId>;
-
 	}
+
+	#[pallet::storage]
+	#[pallet::getter(fn transfer_time)]
+	pub type TransferTime<T: Config> =
+		StorageMap<_, Blake2_128Concat, BlockNumberFor<T>, ProposalId<T>, ValueQuery>;
+
+	#[pallet::storage]
+	#[pallet::getter(fn fund_seeker_accounts)]
+	pub type FundSeekerAccounts<T: Config> =
+		StorageMap<_, Blake2_128Concat, T::Hash, Vec<T::AccountId>, ValueQuery>;
 
 	#[pallet::storage]
 	#[pallet::getter(fn community_members)]
@@ -74,12 +87,21 @@ pub mod pallet {
 
 	#[pallet::storage]
 	#[pallet::getter(fn voting)]
-	pub type Voting<T: Config> =
-	StorageMap<_, Identity, T::Hash,Votes<T::AccountId>, OptionQuery>;
+	pub type Voting<T: Config> = StorageMap<_, Identity, T::Hash, Votes<T::AccountId>, OptionQuery>;
 
 	#[pallet::storage]
 	#[pallet::getter(fn proposal)]
-	pub type Proposal<T: Config> = StorageMap<_,Blake2_128Concat, T::Hash,ProposalInfo<BalanceIn<T>>,OptionQuery>;
+	pub type Proposal<T: Config> =
+		StorageMap<_, Blake2_128Concat, T::Hash, ProposalInfo<BalanceIn<T>>, OptionQuery>;
+
+	#[pallet::storage]
+	#[pallet::getter(fn approvers)]
+	pub type Approvers<T: Config> =
+		StorageMap<_, Blake2_128Concat, T::Hash, Vec<T::AccountId>, ValueQuery>;
+
+	#[pallet::storage]
+	#[pallet::getter(fn pot_account)]
+	pub type PotAccount<T: Config> = StorageValue<_, Vec<T::AccountId>, ValueQuery>;
 
 	// Pallets use events to inform users when important changes are made.
 	#[pallet::event]
@@ -90,6 +112,15 @@ pub mod pallet {
 		ProposalReject,
 		ProposalApproved,
 		ProposalAdded,
+		FundTransfer,
+		FundTransferDeclined,
+		Approved {
+			account: T::AccountId,
+			proposal_hash: T::Hash,
+			voted: Vote,
+			ayes: MemberCount,
+			nays: MemberCount,
+		},
 	}
 
 	// Errors inform users that something went wrong.
@@ -102,6 +133,21 @@ pub mod pallet {
 		/// If sudo try to add a member which is not a part of community.
 		MemberIsNotPresentInCommunity,
 		ProposalAlreadyExist,
+		MemberIsNotPresentInCommittee,
+		AlreadyApproved,
+		ProposalMissing,
+	}
+
+	#[pallet::hooks]
+	impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+		fn on_initialize(n: BlockNumberFor<T>) -> Weight {
+			let transaction_time = TransferTime::<T>::contains_key(n);
+			if transaction_time {
+				let proposal_id = TransferTime::<T>::get(n);
+				let result = Pallet::<T>::transfer_funds(proposal_id);
+			}
+			Weight::zero()
+		}
 	}
 
 	// Dispatchable functions allows users to interact with the pallet and invoke state changes.
@@ -147,9 +193,13 @@ pub mod pallet {
 			Ok(())
 		}
 
-		#[pallet::weight(10_000)]
-		pub fn add_proposal(origin:OriginFor<T>, who: T::AccountId, proposal_hash: T::Hash, amount: BalanceIn<T>) -> DispatchResult {
-			ensure_signed(origin.clone())?;
+		#[pallet::weight(10_000000)]
+		pub fn add_proposal(
+			origin: OriginFor<T>,
+			proposal_hash: T::Hash,
+			amount: BalanceIn<T>,
+		) -> DispatchResult {
+			let who = ensure_signed(origin.clone())?;
 
 			// member should be present in community members list
 			let community_member = CommunityMembers::<T>::get();
@@ -159,21 +209,108 @@ pub mod pallet {
 
 			ensure!(!Voting::<T>::contains_key(&proposal_hash), Error::<T>::ProposalAlreadyExist);
 
-			let info = {
-				ProposalInfo{
-					amount:amount
-				}
-			};
-			<Proposal<T>>::insert(proposal_hash,info);
+			let info = { ProposalInfo { amount } };
+			<Proposal<T>>::insert(proposal_hash, info);
 			// Add Proposal
-			let votes = {
-				Votes{
-					ayes: vec![],nays: vec![],
-				}
-			};
+			let votes = { Votes { ayes: vec![], nays: vec![] } };
 			<Voting<T>>::insert(proposal_hash, votes);
+
+			let mut user = Vec::new();
+			user.push(&who);
+			<FundSeekerAccounts<T>>::insert(proposal_hash, user.clone());
 			Self::deposit_event(Event::ProposalAdded);
 			Ok(())
 		}
+
+		#[pallet::weight(10_000000)]
+		pub fn ApproveProposal(
+			origin: OriginFor<T>,
+			Proposal_hash: T::Hash,
+			approve: Vote,
+		) -> DispatchResult {
+			let who = ensure_signed(origin)?;
+
+			let committee_members = CommitteeMembers::<T>::get();
+			let _is_present = committee_members
+				.binary_search(&who)
+				.map_err(|_| Error::<T>::MemberIsNotPresentInCommittee)?;
+
+			let total_approvers = Approvers::<T>::get(&Proposal_hash);
+
+			let location =
+				total_approvers.binary_search(&who).err().ok_or(Error::<T>::AlreadyApproved)?;
+
+			let mut voting = Self::voting(&Proposal_hash).ok_or(Error::<T>::ProposalMissing)?;
+
+			match approve {
+				Vote::Aye => {
+					voting.ayes.push(who.clone());
+					<Voting<T>>::insert(Proposal_hash, voting.clone());
+				},
+				_ => {
+					voting.nays.push(who.clone());
+					<Voting<T>>::insert(Proposal_hash, voting.clone());
+				},
+			}
+			let mut mem = Approvers::<T>::get(Proposal_hash);
+			mem.insert(location, who.clone());
+			Approvers::<T>::insert(Proposal_hash, mem);
+
+			// Record the current BlockNumber
+			let transaction_blocknumber = frame_system::Pallet::<T>::block_number() + 10u32.into();
+			TransferTime::<T>::insert(transaction_blocknumber, &Proposal_hash);
+
+			let ayes_votes = voting.ayes.len() as MemberCount;
+			let nays_votes = voting.nays.len() as MemberCount;
+
+			Self::deposit_event(Event::Approved {
+				account: who,
+				proposal_hash: Proposal_hash,
+				voted: approve,
+				ayes: ayes_votes,
+				nays: nays_votes,
+			});
+
+			Ok(())
+		}
+
+		#[pallet::weight(10_000000)]
+		pub fn add_pot_account(origin: OriginFor<T>, who: T::AccountId) -> DispatchResult {
+			ensure_root(origin.clone())?;
+
+			let mut accounts = Vec::new();
+			accounts.push(who.clone());
+			PotAccount::<T>::put(accounts);
+			Ok(())
+		}
+	}
+}
+
+impl<T: Config> Pallet<T> {
+	pub fn transfer_funds(proposal_id: T::Hash) -> DispatchResult {
+		let voting = Self::voting(&proposal_id).ok_or(Error::<T>::ProposalMissing)?;
+
+		let no_of_ayes = voting.ayes.len() as MemberCount;
+		let no_of_committee_members = CommitteeMembers::<T>::get();
+		let proposal_info = Proposal::<T>::get(&proposal_id).ok_or(Error::<T>::ProposalMissing)?;
+		let amount_to_transfer = proposal_info.amount;
+		let destination_accounts_list = FundSeekerAccounts::<T>::get(proposal_id);
+		let destination_account = destination_accounts_list[0].clone();
+		let pot_accounts = PotAccount::<T>::get();
+		let source = pot_accounts[0].clone();
+
+		if no_of_ayes == no_of_committee_members.len() as u32 {
+			T::Currency::transfer(
+				&source,
+				&destination_account,
+				amount_to_transfer,
+				ExistenceRequirement::KeepAlive,
+			)?;
+			Self::deposit_event(Event::FundTransfer);
+		} else {
+			Self::deposit_event(Event::FundTransferDeclined);
+		}
+
+		Ok(())
 	}
 }
