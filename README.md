@@ -20,7 +20,7 @@ In summary, pallet having:
 
 
 ## Architecture
-<img src="https://github.com/PankajChaudhary5/Assignment/architecture.jpeg"/>
+<img src="https://github.com/PankajChaudhary5/Assignment/blob/main/architecture.jpeg"/>
 
 
 ### Build the project
