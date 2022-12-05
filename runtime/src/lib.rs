@@ -281,10 +281,18 @@ impl pallet_template::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
 }
 
+parameter_types! {
+	// Time duration for voting on proposal.
+	// For seven days it would be 100800 blocks.
+	// We are using 10 for testing.
+	pub const TimeDuration: u32 = 10;
+}
+
 /// Configure the pallet-proposal in pallets/proposal.
 impl pallet_proposal::Config for Runtime {
 	type RuntimeEvent = RuntimeEvent;
 	type Currency = Balances;
+	type TimeDuration = TimeDuration;
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.
