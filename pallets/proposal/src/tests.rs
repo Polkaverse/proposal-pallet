@@ -170,3 +170,26 @@ fn approve_wrong_proposal_fails() {
 		);
 	});
 }
+
+#[test]
+fn add_pot_account_passed() {
+	new_test_ext().execute_with(|| {
+		const TEST_ACCOUNT: <Test as frame_system::Config>::AccountId = 1;
+		// Dispatch a signed extrinsic.
+
+		assert_ok!(ProposalPallet::add_pot_account(RuntimeOrigin::root(), TEST_ACCOUNT));
+
+		assert_eq!(ProposalPallet::pot_account(), vec![TEST_ACCOUNT]);
+	});
+}
+
+#[test]
+fn fund_pot_account_by_member_not_in_community_fails() {
+	new_test_ext().execute_with(|| {
+		const TEST_ACCOUNT: <Test as frame_system::Config>::AccountId = 1;
+		assert_noop!(
+			ProposalPallet::fund_pot_account(RuntimeOrigin::signed(1), TEST_ACCOUNT, 1000),
+			Error::<Test>::MemberIsNotPresentInCommunity
+		);
+	});
+}
