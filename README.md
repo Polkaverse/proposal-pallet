@@ -1,4 +1,4 @@
-# Substrate Proposal Pallet
+# Proposal Pallet
 
 This is a substrate project in which we can create/add Community having its own pot
 and community members can propose projects to the Committee.
